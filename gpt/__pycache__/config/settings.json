@@ -1,0 +1,14 @@
+{
+  "app_name": "联通小沃智能客服",
+  "data_path": "data/knowledge_base.csv",
+  "history_path": "runtime/chat_history.jsonl",
+  "feedback_path": "runtime/feedback.jsonl",
+  "similarity_threshold": 0.16,
+  "top_k": 3,
+  "use_gpt2": true,
+  "model_path": "../mymodel",
+  "vocab_path": "../资料数据和配置文件/vocab/vocab.txt",
+  "max_new_tokens": 60,
+  "temperature": 0.8,
+  "top_p": 0.9
+}

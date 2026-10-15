@@ -1,0 +1,13 @@
+{
+  "total": 82,
+  "splits": {
+    "train": 74,
+    "validation": 4,
+    "test": 4
+  },
+  "sources": {
+    "local-telecom-kb": 82
+  },
+  "domain_questions": 30000,
+  "seed": 2026
+}

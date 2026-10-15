@@ -1,0 +1,44 @@
+{
+  "recommended": [
+    {
+      "id": "ChineseNlpCorpus/liantongzhidao",
+      "language": "zh",
+      "domain": "联通 FAQ 问答",
+      "size": "203,235 条（本项目已附带原始 CSV）",
+      "license": "来源为百度知道脱敏数据，仅建议教学研究，商用前需核对数据权利",
+      "usage": "筛选最佳回答、去重并过滤日期/价格/旧产品后作为电信领域底座",
+      "enabled": true,
+      "url": "https://gitee.com/weiweiaddress/ChineseNlpCorpus/tree/master/datasets/liantongzhidao"
+    },
+    {
+      "id": "DianJin/DianJin-CSC-Data",
+      "language": "zh",
+      "domain": "多领域专业客服",
+      "size": "约 13,100 条多轮对话",
+      "license": "MIT",
+      "usage": "学习客服流程、共情表达、身份核验和问题解决策略",
+      "enabled": true,
+      "url": "https://huggingface.co/datasets/DianJin/DianJin-CSC-Data"
+    },
+    {
+      "id": "xiaolinAndy/CSDS",
+      "language": "zh",
+      "domain": "真实客服对话与摘要",
+      "size": "10,701 条",
+      "license": "研究使用前需核对仓库条款",
+      "usage": "独立评测、摘要和多轮上下文，不默认混入商业训练",
+      "enabled": false,
+      "url": "https://github.com/xiaolinAndy/CSDS"
+    },
+    {
+      "id": "talkmap/telecom-conversation-corpus",
+      "language": "en",
+      "domain": "电信客服合成对话",
+      "size": "200,000 段 / 3,726,699 行",
+      "license": "MIT",
+      "usage": "仅适合研究电信流程；英文与合成噪声会影响中文模型，默认禁用",
+      "enabled": false,
+      "url": "https://huggingface.co/datasets/talkmap/telecom-conversation-corpus"
+    }
+  ]
+}

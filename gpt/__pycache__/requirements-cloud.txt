@@ -1,0 +1,6 @@
+torch>=2.4
+transformers>=4.51
+datasets>=3.0
+accelerate>=1.2
+safetensors>=0.4
+tensorboard>=2.18

@@ -1,0 +1,168 @@
+"""基于项目 GPT-2 配置在云端训练中文小沃客服模型。
+
+数据编码遵循课程方案：[CLS] 上下文/问题 [SEP] 客服回答 [SEP]。
+默认直接由 config.json 初始化 GPT2LMHeadModel；也可用 --init-model 继续训练已有权重。
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def build_training_samples(dataset: Any, tokenizer: Any, max_length: int) -> list[dict[str, list[int]]]:
+    samples: list[dict[str, list[int]]] = []
+    for row in dataset:
+        history: list[dict[str, str]] = []
+        for message in row["messages"]:
+            role = message.get("role")
+            content = str(message.get("content", "")).strip()
+            if role == "system" or not content:
+                continue
+            if role == "assistant" and history:
+                context = "[SEP]".join(item["content"] for item in history[-6:])
+                prompt_ids = tokenizer.encode(context, add_special_tokens=False)
+                answer_ids = tokenizer.encode(content, add_special_tokens=False)
+                # 优先保留完整回答，过长时从左侧裁剪历史上下文。
+                answer_ids = answer_ids[: max_length - 3]
+                available_prompt = max(0, max_length - len(answer_ids) - 3)
+                prompt_ids = prompt_ids[-available_prompt:]
+                input_ids = [tokenizer.cls_token_id] + prompt_ids + [tokenizer.sep_token_id] + answer_ids + [tokenizer.sep_token_id]
+                answer_start = 2 + len(prompt_ids)
+                labels = [-100] * answer_start + answer_ids + [tokenizer.sep_token_id]
+                samples.append({"input_ids": input_ids, "attention_mask": [1] * len(input_ids), "labels": labels})
+            history.append({"role": role, "content": content})
+    return samples
+
+
+@dataclass
+class DialogueCollator:
+    pad_token_id: int
+
+    def __call__(self, features: list[dict[str, list[int]]]) -> dict[str, Any]:
+        import torch
+
+        width = max(len(feature["input_ids"]) for feature in features)
+        batch = {"input_ids": [], "attention_mask": [], "labels": []}
+        for feature in features:
+            padding = width - len(feature["input_ids"])
+            batch["input_ids"].append(feature["input_ids"] + [self.pad_token_id] * padding)
+            batch["attention_mask"].append(feature["attention_mask"] + [0] * padding)
+            batch["labels"].append(feature["labels"] + [-100] * padding)
+        return {key: torch.tensor(value, dtype=torch.long) for key, value in batch.items()}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="云端 GPT-2 中文客服训练")
+    parser.add_argument("--config", type=Path, default=ROOT.parent / "资料数据和配置文件" / "config" / "config.json")
+    parser.add_argument("--vocab", type=Path, default=ROOT.parent / "资料数据和配置文件" / "vocab" / "vocab.txt")
+    parser.add_argument("--data-dir", type=Path, default=ROOT / "data" / "processed")
+    parser.add_argument("--output", type=Path, default=ROOT / "outputs" / "xiaowo-gpt2")
+    parser.add_argument("--init-model", type=Path, default=None, help="可选：从已有 GPT-2 模型目录继续训练")
+    parser.add_argument("--epochs", type=float, default=3.0)
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--grad-accum", type=int, default=4)
+    parser.add_argument("--learning-rate", type=float, default=5e-5)
+    parser.add_argument("--max-length", type=int, default=512)
+    parser.add_argument("--resume-checkpoint", default=None, help="Trainer checkpoint 路径或 true")
+    args = parser.parse_args()
+
+    try:
+        import torch
+        from datasets import Dataset, load_dataset
+        from transformers import BertTokenizerFast, GPT2Config, GPT2LMHeadModel, Trainer, TrainingArguments, set_seed
+    except ImportError as error:
+        raise SystemExit("请先运行 pip install -r requirements-cloud.txt") from error
+
+    set_seed(2026)
+    tokenizer = BertTokenizerFast(
+        str(args.vocab),
+        pad_token="[PAD]",
+        unk_token="[UNK]",
+        cls_token="[CLS]",
+        sep_token="[SEP]",
+        mask_token="[MASK]",
+    )
+    raw = load_dataset("json", data_files={
+        "train": str(args.data_dir / "train.jsonl"),
+        "validation": str(args.data_dir / "validation.jsonl"),
+    })
+    train_samples = build_training_samples(raw["train"], tokenizer, args.max_length)
+    valid_samples = build_training_samples(raw["validation"], tokenizer, args.max_length)
+    if not train_samples or not valid_samples:
+        raise SystemExit("训练集或验证集没有可用的 assistant 回答")
+    train_dataset = Dataset.from_list(train_samples)
+    valid_dataset = Dataset.from_list(valid_samples)
+
+    if args.init_model:
+        model = GPT2LMHeadModel.from_pretrained(str(args.init_model))
+        if model.config.vocab_size != len(tokenizer):
+            model.resize_token_embeddings(len(tokenizer))
+    else:
+        config = GPT2Config.from_json_file(str(args.config))
+        config.vocab_size = len(tokenizer)
+        config.bos_token_id = tokenizer.cls_token_id
+        config.eos_token_id = tokenizer.sep_token_id
+        config.pad_token_id = tokenizer.pad_token_id
+        model = GPT2LMHeadModel(config)
+    model.config.use_cache = False
+
+    bf16 = bool(torch.cuda.is_available() and torch.cuda.is_bf16_supported())
+    training_args = TrainingArguments(
+        output_dir=str(args.output),
+        num_train_epochs=args.epochs,
+        per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=args.batch_size,
+        gradient_accumulation_steps=args.grad_accum,
+        learning_rate=args.learning_rate,
+        warmup_ratio=0.05,
+        weight_decay=0.01,
+        lr_scheduler_type="cosine",
+        logging_steps=20,
+        eval_strategy="steps",
+        eval_steps=200,
+        save_steps=200,
+        save_total_limit=2,
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
+        bf16=bf16,
+        fp16=torch.cuda.is_available() and not bf16,
+        gradient_checkpointing=True,
+        report_to="tensorboard",
+        seed=2026,
+        data_seed=2026,
+    )
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=valid_dataset,
+        data_collator=DialogueCollator(tokenizer.pad_token_id),
+    )
+    resume: str | bool | None = args.resume_checkpoint
+    if isinstance(resume, str) and resume.lower() == "true":
+        resume = True
+    train_result = trainer.train(resume_from_checkpoint=resume)
+    metrics = trainer.evaluate()
+    metrics["perplexity"] = math.exp(metrics["eval_loss"]) if metrics.get("eval_loss", 100) < 20 else float("inf")
+    metrics.update({"train_samples": len(train_samples), "validation_samples": len(valid_samples)})
+
+    final_dir = args.output / "best_model"
+    trainer.save_model(str(final_dir))
+    tokenizer.save_pretrained(str(final_dir))
+    trainer.save_state()
+    (args.output / "final_metrics.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(metrics, ensure_ascii=False, indent=2))
+    print(f"训练完成，GPT-2 模型：{final_dir}")
+
+
+if __name__ == "__main__":
+    main()
